@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Equity</title>
+<link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+<!-- публичная версия: данные только в зашифрованном data.enc.js (AES-256-GCM, ключ из пароля через PBKDF2-SHA256) -->
+<div id="app">
+  <div class="lock">
+    <form id="f" autocomplete="on">
+      <div class="cap">Equity</div>
+      <input type="text" name="username" value="equity" autocomplete="username" hidden>
+      <input type="password" id="pw" placeholder="Пароль" autocomplete="current-password" required autofocus>
+      <label><input type="checkbox" id="rem" checked> Запомнить на этом устройстве</label>
+      <button type="submit" id="go">Открыть</button>
+      <div class="err" id="err"></div>
+    </form>
+  </div>
+</div>
+<script src="echarts.min.js"></script>
+<script src="dashboard.js"></script>
+<script src="data.enc.js"></script>
+<script>
+(function () {
+  const enc = window.EQUITY_ENC;
+  const $ = id => document.getElementById(id);
+  const b64d = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const b64e = u => btoa(String.fromCharCode(...u));
+  const store = {   // localStorage может быть недоступен (Safari во встроенном окне, приватный режим)
+    get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} },
+    del: k => { try { localStorage.removeItem(k); } catch (e) {} },
+  };
+  if (!enc || !window.crypto || !crypto.subtle) {
+    $('err').textContent = !enc ? 'Данные еще не загружены' : 'Браузер не поддерживает расшифровку';
+    $('go').disabled = true;
+    return;
+  }
+  const KEY = 'eq.key.' + enc.salt;   // ключ (не пароль), привязан к соли
+
+  async function derive(pw) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', hash: 'SHA-256', salt: b64d(enc.salt), iterations: enc.iter }, base, 256);
+    return new Uint8Array(bits);
+  }
+  async function decrypt(raw) {
+    const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(enc.iv) }, key, b64d(enc.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+  function show(data) { renderDashboard(data, $('app')); }
+
+  // сохраненный ключ: открываем сразу
+  const saved = store.get(KEY);
+  if (saved) {
+    decrypt(b64d(saved)).then(show).catch(() => store.del(KEY));
+  }
+
+  $('f').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('err').textContent = ''; $('go').textContent = '…';
+    try {
+      const raw = await derive($('pw').value);
+      const data = await decrypt(raw);
+      if ($('rem').checked) store.set(KEY, b64e(raw)); else store.del(KEY);
+      show(data);
+    } catch (err) {
+      $('err').textContent = 'Неверный пароль';
+      $('go').textContent = 'Открыть';
+      $('pw').select();
+    }
+  });
+})();
+</script>
+</body>
+</html>
